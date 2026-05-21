@@ -1,0 +1,41 @@
+[project]
+name = "chat-agent"
+version = "0.1.0"
+description = "Chat Agent project"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.16.1",
+    "asyncpg>=0.30.0",
+    "fastapi>=0.115.12",
+    "fastapi-limiter>=0.1.6",
+    "greenlet>=3.2.1",
+    "jinja2>=3.1.6",
+    "logfire>=3.15.0",
+    "opentelemetry-instrumentation-asgi>=0.53b1",
+    "opentelemetry-instrumentation-asyncpg>=0.53b1",
+    "opentelemetry-instrumentation-fastapi>=0.53b1",
+    "pgvector>=0.4.1",
+    "psycopg2-binary>=2.9.10",
+    "pydantic-ai>=0.1.10",
+    "pydantic-settings>=2.9.1",
+    "pyjwt>=2.10.0",
+    "redis>=5.0.0",
+    "requests>=2.32.0",
+    "ruff>=0.11.8",
+    "sentry-sdk[fastapi]>=2.19.0",
+    "sqlmodel>=0.0.24",
+    "uvicorn>=0.34.2",
+]
+
+[tool.ruff]
+line-length = 100
+exclude = ["alembic/versions/*"]
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["chat_agent"]  # Replace with your package/module name
+combine-as-imports = true
+lines-after-imports = 2

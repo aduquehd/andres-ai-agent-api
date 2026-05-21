@@ -1,0 +1,49 @@
+name: andres-ai-agent
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: compose/prod/Dockerfile
+    container_name: andres-ai-agent_backend
+    env_file: .env
+    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'
+    depends_on:
+      - db
+    expose:
+      - 8000
+
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: andres-ai-agent_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - chat_agent_db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    container_name: andres-ai-agent_redis
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    container_name: andres-ai-agent_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./compose/prod/Caddyfile:/etc/caddy/Caddyfile
+      - ./caddy-data:/data
+      - ./caddy-config:/config
+    depends_on:
+      - backend
+
+volumes:
+  chat_agent_db_data:

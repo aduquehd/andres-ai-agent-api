@@ -1,0 +1,4 @@
+localhost {
+    reverse_proxy backend:8000
+    tls internal
+}
