@@ -46,4 +46,8 @@ services:
       - backend
 
 volumes:
+  # Pre-existing Postgres data volume from before the project was renamed to
+  # `andres-ai-agent`. We reference it externally so the data survives.
   chat_agent_db_data:
+    external: true
+    name: andresai-agent_chat_agent_db_data
