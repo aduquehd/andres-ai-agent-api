@@ -556,6 +556,128 @@ async def delete_user(
     }
 
 
+# ---------------------------------------------------------- conversations ---
+
+
+CONVERSATION_SORTS = {"last_activity_desc", "user_newest", "messages_desc"}
+
+
+@router.get("/conversations", dependencies=[Depends(require_admin)])
+async def list_conversations(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    q: str | None = None,
+    sort: str = "last_activity_desc",
+    limit: int = DEFAULT_PAGE_SIZE,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """One row per user-with-messages: counts, activity window, last-message preview.
+
+    A 'conversation' here means the bundle of all messages exchanged with a
+    single user, since each end-user is identified by a stable browser UUID
+    (their ``users.username``). Users who have never sent a message are
+    excluded.
+    """
+    if sort not in CONVERSATION_SORTS:
+        sort = "last_activity_desc"
+    limit = _clamp_limit(limit)
+
+    # Per-user message aggregates. ``func.count().filter(...)`` emits Postgres
+    # ``COUNT(*) FILTER (WHERE ...)`` — cleaner than a CASE expression.
+    agg = (
+        select(
+            Message.user_id.label("user_id"),
+            func.count().label("messages_total"),
+            func.count()
+            .filter(Message.direction == MessageDirectionEnum.incoming)
+            .label("incoming"),
+            func.count()
+            .filter(Message.direction == MessageDirectionEnum.outgoing)
+            .label("outgoing"),
+            func.min(Message.created_at).label("first_at"),
+            func.max(Message.created_at).label("last_at"),
+        )
+        .group_by(Message.user_id)
+        .subquery()
+    )
+
+    stmt = select(
+        User,
+        agg.c.messages_total,
+        agg.c.incoming,
+        agg.c.outgoing,
+        agg.c.first_at,
+        agg.c.last_at,
+    ).join(agg, agg.c.user_id == User.id)
+
+    where = None
+    if q:
+        like = f"%{q}%"
+        where = or_(
+            User.username.ilike(like),
+            User.browser_id.ilike(like),
+            User.ip_address.ilike(like),
+            User.country.ilike(like),
+            User.city.ilike(like),
+        )
+        stmt = stmt.where(where)
+
+    if sort == "user_newest":
+        stmt = stmt.order_by(User.created_at.desc())
+    elif sort == "messages_desc":
+        stmt = stmt.order_by(agg.c.messages_total.desc(), agg.c.last_at.desc())
+    else:  # last_activity_desc
+        stmt = stmt.order_by(agg.c.last_at.desc())
+
+    stmt = stmt.offset(offset).limit(limit)
+    rows = (await session.exec(stmt)).all()
+
+    # Fetch the preview (latest message) for each user shown.
+    user_ids = [row[0].id for row in rows]
+    previews: dict[int, dict[str, Any]] = {}
+    if user_ids:
+        # Postgres-specific DISTINCT ON for one query per user.
+        preview_stmt = (
+            select(Message)
+            .where(Message.user_id.in_(user_ids))
+            .order_by(Message.user_id, Message.created_at.desc())
+            .distinct(Message.user_id)
+        )
+        for m in (await session.exec(preview_stmt)).all():
+            previews[m.user_id] = {
+                "message": m.message,
+                "direction": m.direction.value if m.direction else None,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+
+    # Total: number of distinct users that have at least one message (respecting q).
+    if where is not None:
+        total_stmt = (
+            select(func.count(func.distinct(Message.user_id)))
+            .select_from(Message)
+            .join(User, Message.user_id == User.id)
+            .where(where)
+        )
+    else:
+        total_stmt = select(func.count(func.distinct(Message.user_id))).select_from(Message)
+    total = int((await session.exec(total_stmt)).one())
+
+    items = []
+    for user, messages_total, incoming, outgoing, first_at, last_at in rows:
+        items.append(
+            {
+                "user": _user_to_dict(user),
+                "messages_total": int(messages_total),
+                "messages_incoming": int(incoming or 0),
+                "messages_outgoing": int(outgoing or 0),
+                "first_message_at": first_at.isoformat() if first_at else None,
+                "last_message_at": last_at.isoformat() if last_at else None,
+                "preview": previews.get(user.id),
+            }
+        )
+
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
 # --------------------------------------------------------------- messages ---
 
 
