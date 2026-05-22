@@ -17,6 +17,7 @@ from pydantic_ai.messages import (
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from modules.admin.realtime import publish_message_created, publish_user_created
 from modules.agent.agent import agent
 from modules.chats.models import AgentMessage, Message, MessageDirectionEnum
 from modules.chats.services import add_agent_message, add_message
@@ -134,6 +135,7 @@ async def post_chat(
             city=geo_data["city"],
         )
         user = await create_user(session, user)
+        publish_user_created(user)
 
     async def stream_messages():
         """Streams new line delimited JSON Messages to the client."""
@@ -185,7 +187,7 @@ async def post_chat(
         end_datetime = datetime.now(timezone.utc)
 
         # Save user message (outgoing)
-        new_message = Message(
+        outgoing = Message(
             message=prompt,
             user_id=user.id,
             created_at=now,
@@ -197,10 +199,11 @@ async def post_chat(
             region=geo_data["region"],
             city=geo_data["city"],
         )
-        await add_message(session, new_message)
+        await add_message(session, outgoing)
+        publish_message_created(outgoing)
 
         # Save agent response (incoming)
-        new_message = Message(
+        incoming = Message(
             message=agent_response["content"],
             user_id=user.id,
             created_at=end_datetime,  # Use end time for agent response
@@ -212,7 +215,8 @@ async def post_chat(
             region=geo_data["region"],
             city=geo_data["city"],
         )
-        await add_message(session, new_message)
+        await add_message(session, incoming)
+        publish_message_created(incoming)
 
     return StreamingResponse(
         stream_messages(),

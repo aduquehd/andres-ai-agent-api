@@ -26,6 +26,7 @@ dependencies = [
     "sentry-sdk[fastapi]>=2.19.0",
     "sqlmodel>=0.0.24",
     "uvicorn>=0.34.2",
+    "websockets>=13.0",
 ]
 
 [tool.ruff]

@@ -1,12 +1,23 @@
 """JSON admin API consumed by the Next.js admin UI."""
 
+import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+import jwt
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from openai import AsyncOpenAI
 from pydantic import BaseModel
-from sqlalchemy import and_, cast, func, or_
+from sqlalchemy import and_, cast, delete, func, or_
 from sqlalchemy.types import Date
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -15,14 +26,19 @@ from modules.admin.auth import (
     ADMIN_COOKIE_NAME,
     ADMIN_TOKEN_TTL_HOURS,
     create_admin_token,
+    decode_admin_token,
     require_admin,
     verify_admin_credentials,
 )
+from modules.admin.realtime import broadcaster
 from modules.agent.models import AgentContext
 from modules.chats.models import AgentMessage, Message, MessageDirectionEnum
 from modules.knowledge_base.models import KnowledgeBase, KnowledgeBaseTypeEnum
 from modules.users.models import User
 from modules.utils.database import get_session
+
+
+log = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/api/admin")
@@ -79,22 +95,90 @@ async def me(username: Annotated[str, Depends(require_admin)]) -> MeResponse:
     return MeResponse(username=username)
 
 
+# --------------------------------------------------------------- realtime ---
+
+# WebSocket close codes (4xxx range is reserved for app-defined values)
+WS_AUTH_REQUIRED = 4401
+
+
+@router.websocket("/ws")
+async def admin_ws(websocket: WebSocket) -> None:
+    """Authenticated event stream for the admin UI.
+
+    Authentication reuses the admin JWT cookie (``admin_session``). The browser
+    sends the cookie automatically on the WebSocket handshake when the cookie's
+    SameSite policy allows it (set to ``None`` in :func:`login`).
+    """
+    token = websocket.cookies.get(ADMIN_COOKIE_NAME)
+    if not token:
+        await websocket.close(code=WS_AUTH_REQUIRED)
+        return
+    try:
+        payload = decode_admin_token(token)
+    except jwt.PyJWTError:
+        await websocket.close(code=WS_AUTH_REQUIRED)
+        return
+    if payload.get("scope") != "admin":
+        await websocket.close(code=WS_AUTH_REQUIRED)
+        return
+
+    await websocket.accept()
+    queue = await broadcaster.subscribe()
+    try:
+        # A short hello so the client can confirm the connection is live.
+        await websocket.send_json({"type": "hello", "username": payload.get("sub", "")})
+        while True:
+            event = await queue.get()
+            await websocket.send_json(event)
+    except WebSocketDisconnect:
+        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        log.exception("admin ws: send loop crashed")
+    finally:
+        await broadcaster.unsubscribe(queue)
+
+
 # -------------------------------------------------------------- dashboard ---
+
+
+MESSAGES_RANGES = {"this_month", "30d", "60d", "90d", "all"}
+
+
+def _resolve_messages_range(
+    messages_range: str, today_start: datetime, earliest: datetime | None
+) -> tuple[datetime, int]:
+    """Return (start_datetime, day_count) for the chart based on the selected range."""
+    if messages_range == "this_month":
+        start = today_start.replace(day=1)
+    elif messages_range == "30d":
+        start = today_start - timedelta(days=29)
+    elif messages_range == "60d":
+        start = today_start - timedelta(days=59)
+    elif messages_range == "90d":
+        start = today_start - timedelta(days=89)
+    else:  # "all"
+        start = earliest.replace(hour=0, minute=0, second=0, microsecond=0) if earliest else today_start
+    day_count = max(1, (today_start.date() - start.date()).days + 1)
+    return start, day_count
 
 
 @router.get("/dashboard/stats", dependencies=[Depends(require_admin)])
 async def dashboard_stats(
     session: Annotated[AsyncSession, Depends(get_session)],
+    messages_range: str = "all",
 ) -> dict[str, Any]:
     """Aggregate metrics powering the admin dashboard.
 
-    Returns totals across entities, today's activity, last-30-day message volume
-    split by direction, top countries, the overall direction split, and latency
-    percentiles. Everything is computed in a handful of SQL aggregations.
+    The ``messages_range`` query controls the throughput chart bucket span:
+    one of ``this_month``, ``30d``, ``60d``, ``90d``, or ``all`` (default).
+    Other metrics (totals, latency, etc.) are not affected by this filter.
     """
+    if messages_range not in MESSAGES_RANGES:
+        messages_range = "all"
     now = datetime.now(tz=timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    last_30_start = today_start - timedelta(days=29)
 
     # ----- Totals (one query each, count) -----
     users_total = int((await session.exec(select(func.count()).select_from(User))).one())
@@ -139,7 +223,11 @@ async def dashboard_stats(
         float(avg_latency_today_row) if avg_latency_today_row is not None else None
     )
 
-    # ----- Messages per day for last 30 days, split by direction -----
+    # ----- Messages per day for the selected range, split by direction -----
+    earliest = (
+        await session.exec(select(func.min(Message.created_at)))
+    ).one()
+    range_start, day_count = _resolve_messages_range(messages_range, today_start, earliest)
     day_col = cast(Message.created_at, Date).label("day")
     rows = (
         await session.exec(
@@ -148,7 +236,7 @@ async def dashboard_stats(
                 Message.direction,
                 func.count().label("count"),
             )
-            .where(Message.created_at >= last_30_start)
+            .where(Message.created_at >= range_start)
             .group_by(day_col, Message.direction)
             .order_by(day_col.asc())
         )
@@ -161,8 +249,8 @@ async def dashboard_stats(
         if direction is not None:
             bucket[direction.value] = int(count)
     messages_by_day: list[dict[str, Any]] = []
-    for i in range(30):
-        d = (last_30_start + timedelta(days=i)).date()
+    for i in range(day_count):
+        d = (range_start + timedelta(days=i)).date()
         key = d.isoformat()
         b = buckets.get(key, {"incoming": 0, "outgoing": 0})
         messages_by_day.append(
@@ -236,6 +324,7 @@ async def dashboard_stats(
             "avg_latency_ms": avg_latency_today,
         },
         "messages_by_day": messages_by_day,
+        "messages_range": messages_range,
         "messages_by_country": messages_by_country,
         "direction_split": direction_split,
         "latency": latency,
@@ -365,16 +454,106 @@ async def get_user(
     return _user_to_dict(user)
 
 
+@router.get("/users/{user_id}/stats", dependencies=[Depends(require_admin)])
+async def get_user_stats(
+    user_id: int, session: Annotated[AsyncSession, Depends(get_session)]
+) -> dict[str, Any]:
+    """User profile plus aggregate activity counts and date range."""
+    user = await session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    direction_rows = (
+        await session.exec(
+            select(Message.direction, func.count().label("count"))
+            .where(Message.user_id == user_id)
+            .group_by(Message.direction)
+        )
+    ).all()
+    incoming = 0
+    outgoing = 0
+    for d, n in direction_rows:
+        if d == MessageDirectionEnum.incoming:
+            incoming = int(n)
+        elif d == MessageDirectionEnum.outgoing:
+            outgoing = int(n)
+
+    agent_messages_total = int(
+        (
+            await session.exec(
+                select(func.count())
+                .select_from(AgentMessage)
+                .where(AgentMessage.user_id == user_id)
+            )
+        ).one()
+    )
+
+    range_row = (
+        await session.exec(
+            select(
+                func.min(Message.created_at),
+                func.max(Message.created_at),
+                func.avg(Message.response_time_ms),
+            ).where(Message.user_id == user_id)
+        )
+    ).one()
+    first_at, last_at, avg_latency = range_row
+
+    return {
+        "user": _user_to_dict(user),
+        "messages_total": incoming + outgoing,
+        "messages_incoming": incoming,
+        "messages_outgoing": outgoing,
+        "agent_messages_total": agent_messages_total,
+        "first_message_at": first_at.isoformat() if first_at else None,
+        "last_message_at": last_at.isoformat() if last_at else None,
+        "avg_response_time_ms": float(avg_latency) if avg_latency is not None else None,
+    }
+
+
 @router.delete("/users/{user_id}", dependencies=[Depends(require_admin)])
 async def delete_user(
     user_id: int, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> dict:
+    """Delete a user and cascade-remove all their messages and agent messages."""
     user = await session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    messages_deleted = int(
+        (
+            await session.exec(
+                select(func.count())
+                .select_from(Message)
+                .where(Message.user_id == user_id)
+            )
+        ).one()
+    )
+    agent_messages_deleted = int(
+        (
+            await session.exec(
+                select(func.count())
+                .select_from(AgentMessage)
+                .where(AgentMessage.user_id == user_id)
+            )
+        ).one()
+    )
+    await session.exec(delete(Message).where(Message.user_id == user_id))
+    await session.exec(delete(AgentMessage).where(AgentMessage.user_id == user_id))
     await session.delete(user)
     await session.commit()
-    return {"ok": True}
+    broadcaster.publish(
+        {
+            "type": "user.deleted",
+            "id": user_id,
+            "messages_deleted": messages_deleted,
+            "agent_messages_deleted": agent_messages_deleted,
+        }
+    )
+    return {
+        "ok": True,
+        "messages_deleted": messages_deleted,
+        "agent_messages_deleted": agent_messages_deleted,
+    }
 
 
 # --------------------------------------------------------------- messages ---
@@ -457,8 +636,10 @@ async def delete_message(
     m = await session.get(Message, message_id)
     if not m:
         raise HTTPException(status_code=404, detail="Message not found")
+    user_id = m.user_id
     await session.delete(m)
     await session.commit()
+    broadcaster.publish({"type": "message.deleted", "id": message_id, "user_id": user_id})
     return {"ok": True}
 
 
