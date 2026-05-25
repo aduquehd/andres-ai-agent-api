@@ -8,7 +8,7 @@ from fastapi_limiter import FastAPILimiter
 from config import settings
 from modules.admin.routers import router as admin_router
 from modules.chats.routers import router as chats_router
-from modules.utils.redis import init_redis
+from modules.utils.redis import close_redis, init_redis
 from modules.utils.sentry import init_sentry
 
 
@@ -22,6 +22,7 @@ async def lifespan(app: FastAPI):
     await FastAPILimiter.init(redis_client)
     yield
     await FastAPILimiter.close()
+    await close_redis()
 
 
 app = FastAPI(lifespan=lifespan)

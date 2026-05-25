@@ -1,54 +1,98 @@
-import requests
+import json
+import logging
+from ipaddress import ip_address as parse_ip
+
+import httpx
+from redis.exceptions import RedisError
 
 from config import settings
+from modules.utils.redis import get_redis
 
 
-def _is_private_172_range(ip_address: str) -> bool:
-    """Check if IP is in the private 172.16.0.0/12 range (172.16.0.0 - 172.31.255.255)."""
-    if not ip_address.startswith("172."):
+logger = logging.getLogger(__name__)
+
+GEO_CACHE_PREFIX = "geo:"
+# IP → location mappings are extremely stable. A 30-day TTL keeps the
+# ipapi.co free tier well under quota for repeat visitors and shared
+# egress IPs (offices, mobile carriers) without going stale in practice.
+GEO_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30
+
+EMPTY_GEO: dict[str, str | None] = {"country": None, "region": None, "city": None}
+
+
+def _is_public_ip(ip: str) -> bool:
+    """True only for routable, non-private IPs we can geolocate."""
+    if not ip or ip == "unknown":
+        return False
+    try:
+        return parse_ip(ip).is_global
+    except ValueError:
         return False
 
+
+async def get_geographic_data(ip: str) -> dict[str, str | None]:
+    """Look up country/region/city for an IP.
+
+    Reads/writes a Redis cache keyed by IP so each IP only hits ipapi.co
+    once per TTL window. Falls back to a live API call when the cache is
+    unavailable or missing the key. Always returns the standard
+    country/region/city dict (values may be ``None``).
+    """
+    if not _is_public_ip(ip):
+        return dict(EMPTY_GEO)
+
+    cache_key = f"{GEO_CACHE_PREFIX}{ip}"
+    redis_client = get_redis()
+
+    if redis_client is not None:
+        try:
+            cached = await redis_client.get(cache_key)
+        except RedisError as exc:
+            logger.warning("Redis GET failed for %s: %s", cache_key, exc)
+            cached = None
+        if cached:
+            try:
+                return json.loads(cached)
+            except json.JSONDecodeError:
+                logger.warning("Discarding malformed geo cache for %s", ip)
+
+    geo = await _fetch_from_ipapi(ip)
+
+    # Only cache successful lookups — caching empty results would lock in
+    # transient failures (rate limits, network blips) for 30 days.
+    if redis_client is not None and any(geo.values()):
+        try:
+            await redis_client.set(cache_key, json.dumps(geo), ex=GEO_CACHE_TTL_SECONDS)
+        except RedisError as exc:
+            logger.warning("Redis SET failed for %s: %s", cache_key, exc)
+
+    return geo
+
+
+async def _fetch_from_ipapi(ip: str) -> dict[str, str | None]:
+    """Call ipapi.co once. Returns EMPTY_GEO on any failure."""
+    url = f"https://ipapi.co/{ip}/json/"
+    params: dict[str, str] = {}
+    if settings.ipapi_secret_api_key:
+        params["key"] = settings.ipapi_secret_api_key
+
     try:
-        parts = ip_address.split(".")
-        if len(parts) != 4:
-            return False
-
-        second_octet = int(parts[1])
-        # Private range is 172.16.x.x to 172.31.x.x
-        return 16 <= second_octet <= 31
-    except (ValueError, IndexError):
-        return False
-
-
-def get_geographic_data(ip_address: str) -> dict:
-    """Get geographic information from IP address using ipapi.co (free tier)."""
-    # Check for private/local IP addresses
-    if (
-        ip_address in ["unknown", "127.0.0.1", "::1"]
-        or ip_address.startswith("192.168.")
-        or ip_address.startswith("10.")
-        or _is_private_172_range(ip_address)
-    ):
-        print(f"  Skipping private/local IP: {ip_address}")
-        return {"country": None, "region": None, "city": None}
-
-    try:
-        url = f"https://ipapi.co/{ip_address}/json/"
-        if settings.ipapi_secret_api_key:
-            url += f"?key={settings.ipapi_secret_api_key}"
-
-        response = requests.get(url, timeout=3)
-        if response.status_code == 200:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
             data = response.json()
-            print(f"  API response for {ip_address}: {data}")
-            return {
-                "country": data.get("country_code"),
-                "region": data.get("region"),
-                "city": data.get("city"),
-            }
-        else:
-            print(f"  API error for {ip_address}: Status {response.status_code}")
-    except Exception as e:
-        print(f"  API exception for {ip_address}: {str(e)}")
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("ipapi.co lookup failed for %s: %s", ip, exc)
+        return dict(EMPTY_GEO)
 
-    return {"country": None, "region": None, "city": None}
+    # ipapi.co signals errors via a JSON body (e.g. rate-limited, reserved
+    # range) rather than an HTTP error status.
+    if data.get("error"):
+        logger.warning("ipapi.co error for %s: %s", ip, data.get("reason"))
+        return dict(EMPTY_GEO)
+
+    return {
+        "country": data.get("country_code"),
+        "region": data.get("region"),
+        "city": data.get("city"),
+    }

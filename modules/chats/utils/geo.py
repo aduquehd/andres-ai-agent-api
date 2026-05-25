@@ -1,4 +1,4 @@
-from sqlmodel import select
+import logging
 
 from modules.chats.services import update_messages_geo_data
 from modules.users.models import User
@@ -6,53 +6,41 @@ from modules.users.services import update_user_geo_data
 from modules.utils.database import async_session
 
 
-async def update_user_and_messages_geo_background(
-    user_id: int,
-    user_country: str | None,
-    user_region: str | None,
-    user_city: str | None,
-    geo_data: dict,
-):
-    """Background task to update user and message geo data if they don't have it but request does."""
+logger = logging.getLogger(__name__)
+
+
+async def backfill_user_and_messages_geo(user_id: int, geo_data: dict[str, str | None]) -> None:
+    """Persist a fresh geo lookup onto an existing user and their messages.
+
+    Runs as a FastAPI BackgroundTask after the response has been streamed,
+    so the request path itself never waits on the DB writes. Only invoked
+    when the user previously had no geo data and the IP lookup just
+    returned at least one populated field.
+    """
+    if not any(geo_data.values()):
+        return
+
     try:
-        # Create a new session for the background task
         async with async_session() as session:
-            user_has_geo = any([user_country, user_region, user_city])
-            request_has_geo = any([geo_data["country"], geo_data["region"], geo_data["city"]])
+            user = await session.get(User, user_id)
+            if user is None:
+                return
 
-            final_geo_for_update = None
-
-            if not user_has_geo and request_has_geo:
-                final_geo_for_update = geo_data
-            elif user_has_geo and not request_has_geo:
-                final_geo_for_update = {
-                    "country": user_country,
-                    "region": user_region,
-                    "city": user_city,
-                }
-
-            if final_geo_for_update:
-                if not user_has_geo and request_has_geo:
-                    # We need to fetch the user again in this new session
-                    statement = select(User).where(User.id == user_id)
-                    result = await session.exec(statement)
-                    user = result.first()
-
-                    if user:
-                        await update_user_geo_data(
-                            session,
-                            user,
-                            final_geo_for_update["country"],
-                            final_geo_for_update["region"],
-                            final_geo_for_update["city"],
-                        )
-
-                await update_messages_geo_data(
+            if not any([user.country, user.region, user.city]):
+                await update_user_geo_data(
                     session,
-                    user_id,
-                    final_geo_for_update["country"],
-                    final_geo_for_update["region"],
-                    final_geo_for_update["city"],
+                    user,
+                    geo_data["country"],
+                    geo_data["region"],
+                    geo_data["city"],
                 )
+
+            await update_messages_geo_data(
+                session,
+                user_id,
+                geo_data["country"],
+                geo_data["region"],
+                geo_data["city"],
+            )
     except Exception:
-        pass
+        logger.exception("Geo backfill failed for user %s", user_id)

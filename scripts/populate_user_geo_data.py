@@ -14,6 +14,7 @@ from modules.chats.models import AgentMessage, Message  # noqa
 from modules.users.models import User
 from modules.utils.database import async_session
 from modules.utils.geo import get_geographic_data
+from modules.utils.redis import close_redis, init_redis
 
 
 async def get_users_without_geo_data(db: AsyncSession) -> list[User]:
@@ -31,7 +32,7 @@ async def update_user_geo_data(db: AsyncSession, user: User) -> bool:
     if not user.ip_address or user.ip_address == "unknown":
         return False
 
-    geo_data = get_geographic_data(user.ip_address)
+    geo_data = await get_geographic_data(user.ip_address)
     print(f"  Geo data result: {geo_data}")
 
     if geo_data["country"] or geo_data["region"] or geo_data["city"]:
@@ -49,35 +50,42 @@ async def update_user_geo_data(db: AsyncSession, user: User) -> bool:
 
 async def main():
     """Main function to populate geo data for all users."""
-    async with async_session() as db:
-        users_without_geo = await get_users_without_geo_data(db)
+    await init_redis()
+    try:
+        async with async_session() as db:
+            users_without_geo = await get_users_without_geo_data(db)
 
-        if not users_without_geo:
-            print("No users found without geographic data.")
-            return
+            if not users_without_geo:
+                print("No users found without geographic data.")
+                return
 
-        print(f"Found {len(users_without_geo)} users without complete geo data.")
+            print(f"Found {len(users_without_geo)} users without complete geo data.")
 
-        updated_count = 0
-        failed_count = 0
+            updated_count = 0
+            failed_count = 0
 
-        for i, user in enumerate(users_without_geo, 1):
-            print(
-                f"\nProcessing user {i}/{len(users_without_geo)}: {user.username} (IP: {user.ip_address})"
-            )
+            for i, user in enumerate(users_without_geo, 1):
+                print(
+                    f"\nProcessing user {i}/{len(users_without_geo)}: "
+                    f"{user.username} (IP: {user.ip_address})"
+                )
 
-            if await update_user_geo_data(db, user):
-                updated_count += 1
-            else:
-                failed_count += 1
+                if await update_user_geo_data(db, user):
+                    updated_count += 1
+                else:
+                    failed_count += 1
 
-            # Add a small delay to avoid rate limiting
-            await asyncio.sleep(0.5)
+                # Stay under ipapi.co's free-tier rate limit. Cached IPs
+                # skip the API entirely, so this only matters when the
+                # batch contains many distinct, never-seen IPs.
+                await asyncio.sleep(0.5)
 
-        print("\n--- Summary ---")
-        print(f"Total users processed: {len(users_without_geo)}")
-        print(f"Successfully updated: {updated_count}")
-        print(f"Failed to update: {failed_count}")
+            print("\n--- Summary ---")
+            print(f"Total users processed: {len(users_without_geo)}")
+            print(f"Successfully updated: {updated_count}")
+            print(f"Failed to update: {failed_count}")
+    finally:
+        await close_redis()
 
 
 if __name__ == "__main__":

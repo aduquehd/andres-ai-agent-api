@@ -23,7 +23,7 @@ from modules.admin.realtime import publish_message_created, publish_user_created
 from modules.agent.agent import agent
 from modules.chats.models import AgentMessage, Message, MessageDirectionEnum
 from modules.chats.services import add_agent_message, add_message
-from modules.chats.utils.geo import update_user_and_messages_geo_background
+from modules.chats.utils.geo import backfill_user_and_messages_geo
 from modules.users.models import User
 from modules.users.services import create_user, get_user_by_username
 from modules.utils.agent import Deps, to_chat_message
@@ -42,32 +42,25 @@ async def _get_user_geo_data(
     client_ip: str,
     background_tasks: BackgroundTasks,
 ) -> dict[str, str | None]:
-    """Get or update user geographic data.
+    """Resolve the geo data to attach to the current request's records.
 
-    Returns a dict with country, region, and city keys.
-    If user exists and has geo data, returns user's data.
-    If user exists but lacks geo data, fetches it and schedules background update.
-    If user doesn't exist, fetches geo data from IP.
+    - Existing user with geo data: reuse it, skip the API entirely.
+    - Existing user without geo data: do a (cached) lookup and schedule a
+      background task to persist it onto the user + their old messages.
+    - New user: do a (cached) lookup; the caller writes it onto the new
+      User row inline, so no background task is needed.
     """
-    if user:
-        if not any([user.country, user.region, user.city]):
-            geo_data = get_geographic_data(client_ip)
-            background_tasks.add_task(
-                update_user_and_messages_geo_background,
-                user.id,
-                user.country,
-                user.region,
-                user.city,
-                geo_data,
-            )
-        else:
-            geo_data = {
-                "country": user.country,
-                "region": user.region,
-                "city": user.city,
-            }
-    else:
-        geo_data = get_geographic_data(client_ip)
+    if user and any([user.country, user.region, user.city]):
+        return {
+            "country": user.country,
+            "region": user.region,
+            "city": user.city,
+        }
+
+    geo_data = await get_geographic_data(client_ip)
+
+    if user is not None and any(geo_data.values()):
+        background_tasks.add_task(backfill_user_and_messages_geo, user.id, geo_data)
 
     return geo_data
 
