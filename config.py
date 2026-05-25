@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     app_env: str = "development"
     debug: bool = False
 
+    # Agent / RAG
+    agent_model: str = "anthropic:claude-sonnet-4-6"
+    embedding_model: str = "text-embedding-3-small"
+
     # Analytics
     ga_tracking_id: str | None = None
 

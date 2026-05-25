@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-from openai import AsyncOpenAI
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.messages import (
     ModelMessage,
@@ -17,7 +16,6 @@ from typing_extensions import TypedDict
 
 @dataclass
 class Deps:
-    openai: AsyncOpenAI
     session: AsyncSession | None = None
 
 

@@ -45,9 +45,12 @@ async def get_knowledge_base_embedding_list(
     session: AsyncSession,
     knowledge_base_type: KnowledgeBaseTypeEnum,
     embedding_json: str,
+    limit: int = 10,
 ):
-    query = select(KnowledgeBase).order_by(
-        text("embedding <-> :embedding")  # pgvector similarity
+    query = (
+        select(KnowledgeBase)
+        .order_by(text("embedding <-> :embedding"))  # pgvector similarity
+        .limit(limit)
     )
 
     if knowledge_base_type:

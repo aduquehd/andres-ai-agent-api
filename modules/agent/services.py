@@ -8,7 +8,7 @@ from modules.agent.models import AgentContext
 async def get_agent_context(session: AsyncSession) -> str:
     query = (
         select(AgentContext)
-        .where(AgentContext.status == True)
+        .where(AgentContext.status.is_(True))
         .order_by(desc(AgentContext.created_at))
         .limit(1)
     )
@@ -16,7 +16,7 @@ async def get_agent_context(session: AsyncSession) -> str:
     result = await session.exec(query)
     agent_context = result.first()
 
-    if not agent_context:
+    if not agent_context or not agent_context.agent_prompt:
         return ""
 
     return agent_context.agent_prompt

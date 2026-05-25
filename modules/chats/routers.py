@@ -7,12 +7,14 @@ import logfire
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
 from fastapi.responses import Response, StreamingResponse
 from fastapi_limiter.depends import RateLimiter
-from openai import AsyncOpenAI
+from pydantic_ai import Agent
 from pydantic_ai.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
-    ModelResponse,
+    PartDeltaEvent,
+    PartStartEvent,
     TextPart,
+    TextPartDelta,
 )
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -151,9 +153,6 @@ async def post_chat(
             + b"\n"
         )
 
-        openai = AsyncOpenAI()
-        logfire.instrument_openai(openai)
-
         logfire.info('Asking "{question}" from user {user_id}', question=prompt, user_id=user_id)
 
         query = select(AgentMessage).where(AgentMessage.user_id == user.id)
@@ -164,18 +163,57 @@ async def post_chat(
         for message in messages:
             list_messages.extend(ModelMessagesTypeAdapter.validate_json(message.message_list))
 
-        deps = Deps(openai=openai, session=session)
+        deps = Deps(session=session)
 
-        async with agent.run_stream(prompt, message_history=list_messages, deps=deps) as result:
-            async for text in result.stream(debounce_by=0.01):
-                # text here is a str and the frontend wants
-                # JSON encoded ModelResponse, so we create one
-                m = ModelResponse(parts=[TextPart(text)], timestamp=result.timestamp())
-                agent_response = to_chat_message(m)
+        # Stream via agent.iter() so text emitted before AND after tool calls is
+        # forwarded to the client. agent.run_stream() only streams the first
+        # model response, which silently truncates when Claude emits a
+        # preamble + parallel tool calls.
+        # The timestamp is captured once and reused for every chunk so the
+        # frontend treats them as updates to the same message bubble rather
+        # than separate messages.
+        accumulated_text = ""
+        new_message_json = b""
+        stream_timestamp = datetime.now(tz=timezone.utc).isoformat()
 
-                yield json.dumps(agent_response).encode("utf-8") + b"\n"
+        async with agent.iter(prompt, message_history=list_messages, deps=deps) as agent_run:
+            async for node in agent_run:
+                if Agent.is_model_request_node(node):
+                    async with node.stream(agent_run.ctx) as request_stream:
+                        async for event in request_stream:
+                            is_new_text_part = False
+                            delta = None
+                            if isinstance(event, PartStartEvent):
+                                if isinstance(event.part, TextPart):
+                                    is_new_text_part = True
+                                    delta = event.part.content
+                            elif isinstance(event, PartDeltaEvent):
+                                if isinstance(event.delta, TextPartDelta):
+                                    delta = event.delta.content_delta
 
-        new_message_json = result.new_messages_json()
+                            if not delta:
+                                continue
+
+                            if (
+                                is_new_text_part
+                                and accumulated_text
+                                and not accumulated_text.endswith("\n\n")
+                            ):
+                                accumulated_text += "\n\n"
+                            accumulated_text += delta
+
+                            yield (
+                                json.dumps(
+                                    {
+                                        "role": "model",
+                                        "timestamp": stream_timestamp,
+                                        "content": accumulated_text,
+                                    }
+                                ).encode("utf-8")
+                                + b"\n"
+                            )
+
+            new_message_json = agent_run.result.new_messages_json()
         agent_message = AgentMessage(
             user_id=user.id, message_list=new_message_json.decode("utf-8"), created_at=now
         )
@@ -204,7 +242,7 @@ async def post_chat(
 
         # Save agent response (incoming)
         incoming = Message(
-            message=agent_response["content"],
+            message=accumulated_text,
             user_id=user.id,
             created_at=end_datetime,  # Use end time for agent response
             direction=MessageDirectionEnum.incoming,

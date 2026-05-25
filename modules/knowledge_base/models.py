@@ -9,7 +9,8 @@ from sqlmodel import Column, Field, SQLModel
 
 class KnowledgeBaseTypeEnum(str, Enum):
     hobbies = "hobbies"
-    foods = "foods"
+    favorite_foods = "favorite_foods"
+    professional_experience = "professional_experience"
 
 
 class KnowledgeBase(SQLModel, table=True):

@@ -39,6 +39,7 @@ app.include_router(admin_router)
 
 logfire.configure(send_to_logfire="if-token-present")
 logfire.instrument_fastapi(app)
+logfire.instrument_asyncpg()
 
 
 @app.get("/health")

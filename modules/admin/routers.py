@@ -15,7 +15,6 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from openai import AsyncOpenAI
 from pydantic import BaseModel
 from sqlalchemy import and_, cast, delete, func, or_
 from sqlalchemy.types import Date
@@ -36,6 +35,7 @@ from modules.chats.models import AgentMessage, Message, MessageDirectionEnum
 from modules.knowledge_base.models import KnowledgeBase, KnowledgeBaseTypeEnum
 from modules.users.models import User
 from modules.utils.database import get_session
+from modules.utils.embeddings import embed_document
 
 
 log = logging.getLogger(__name__)
@@ -824,10 +824,8 @@ class KnowledgeBasePayload(BaseModel):
 
 
 async def _compute_embedding(payload: KnowledgeBasePayload) -> list[float]:
-    openai = AsyncOpenAI()
     text = f"type: {payload.type.value}\ntitle: {payload.title}\ncontent: {payload.content}"
-    response = await openai.embeddings.create(input=text, model="text-embedding-3-small")
-    return response.data[0].embedding
+    return await embed_document(text)
 
 
 @router.get("/knowledge-base", dependencies=[Depends(require_admin)])
