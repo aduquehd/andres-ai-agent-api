@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🤖 AI Agent Chatbot
+# 🤖 AndresAI — API (Backend)
 
 <a href="https://andres-ai.aduquehd.com/">
   <img src="https://img.shields.io/badge/🔗%20Live%20Demo-Visit%20Site-blue?style=for-the-badge" alt="Live Demo">
@@ -8,29 +8,26 @@
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io/)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=for-the-badge&logo=openai&logoColor=white)](https://openai.com/)
 
-**A production-ready AI chatbot system built with modern web technologies**
+**FastAPI backend for the AndresAI chat assistant — streaming chat, RAG over pgvector, and a JSON admin API.**
 
-[Repository layout](#-repository-layout) • [Features](#-features) • [Quick Start](#-quick-start) • [Development](#-development) • [Deployment](#-deployment)
+[Companion repo](#-companion-repo) • [Features](#-features) • [Quick Start](#-quick-start) • [API](#-api-endpoints) • [Deployment](#-deployment)
 
 </div>
 
 ---
 
-## 🗂 Repository layout
+## 🔗 Companion repo
 
-This repo is a monorepo with two independent projects:
+This is the **backend** half of AndresAI. It used to be a monorepo, but the frontend now lives in its own repository:
 
-```
-.
-├── andres-ai-api/   FastAPI backend (chat streaming + admin JSON API + Postgres/pgvector + Redis)
-└── andres-ai-app/   Next.js 16 frontend (chat at /, admin at /admin) — deploys to Vercel
-```
+- **Backend (this repo)** — [`AndresAI-Agent`](https://github.com/aduquehd/AndresAI-Agent): FastAPI, PostgreSQL/pgvector, Redis. Deployed via Docker on a server.
+- **Frontend** — [`andres-ai-agent-app`](https://github.com/aduquehd/andres-ai-agent-app): Next.js 16 app that serves the chat at `/` and the admin at `/admin`. Deployed on Vercel.
 
-They run independently and talk over HTTPS using `NEXT_PUBLIC_API_URL` (frontend → backend) and a CORS allow-list on the backend (`FRONTEND_ORIGINS`).
+The two communicate over HTTPS. The frontend points at this API via `NEXT_PUBLIC_API_URL`, and this API allows the frontend's origin via `FRONTEND_ORIGINS` (CORS allow-list, with credentials).
 
 ## ✨ Features
 
@@ -38,21 +35,20 @@ They run independently and talk over HTTPS using `NEXT_PUBLIC_API_URL` (frontend
 <tr>
 <td>
 
-### 🚀 Core Features
-- 🤖 **AI-Powered Chat** - Intelligent conversational interface
-- 🌐 **Modern Web UI** - Real-time streaming responses
-- 🔍 **Semantic Search** - Vector embeddings with pgvector
-- 📊 **Admin Panel** - Easy knowledge base management
+### 🚀 Core
+- 🤖 **Streaming chat** — newline-delimited JSON over HTTP
+- 🔍 **Semantic search** — vector embeddings with pgvector
+- 📊 **Admin JSON API** — CRUD over users, messages, knowledge base, agent contexts
+- 🧠 **Pydantic AI** — typed agent + tool calls
 
 </td>
 <td>
 
-### 🛡️ Production Ready
-- 🔒 **Secure Auth** - Session management & authentication
-- 🐳 **Dockerized** - Full container orchestration
-- 📈 **Scalable** - Async architecture with FastAPI
-- 🔧 **Configurable** - Environment-based configuration
-- ⚡ **Rate Limiting** - Built-in API throttling with Redis
+### 🛡️ Production
+- 🔒 **JWT admin auth** — httpOnly cookie, `SameSite=None; Secure` for cross-origin
+- 🐳 **Dockerized** — local + prod compose files, Caddy in front
+- ⚡ **Rate limiting** — Redis-backed, per-IP, with CloudFlare/proxy support
+- 📈 **Observability** — Logfire + optional Sentry
 
 </td>
 </tr>
@@ -60,226 +56,189 @@ They run independently and talk over HTTPS using `NEXT_PUBLIC_API_URL` (frontend
 
 ## 📋 Prerequisites
 
-<table>
-<tr>
-<td align="center">
-<img src="https://raw.githubusercontent.com/docker/compose/main/logo.png" width="60" height="60" alt="Docker">
-<br>
-<b>Docker & Compose</b>
-</td>
-<td align="center">
-<img src="https://nodejs.org/static/images/logo.svg" width="60" height="60" alt="Node.js">
-<br>
-<b>Node.js & pnpm</b>
-</td>
-<td align="center">
-<img src="https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg" width="60" height="60" alt="OpenAI">
-<br>
-<b>OpenAI API Key</b>
-</td>
-</tr>
-</table>
+- Docker & Docker Compose
+- An OpenAI API key
+- (For the full chat experience) the [frontend repo](https://github.com/aduquehd/andres-ai-agent-app) running and pointed at this API
 
 ## 🚀 Quick Start
 
-### 1️⃣ **Clone the repository**
+### 1️⃣ Clone
 
 ```bash
-git clone <repository-url>
-cd AndresAI
+git clone git@github.com:aduquehd/AndresAI-Agent.git
+cd AndresAI-Agent
 ```
 
-### 2️⃣ **Configure the backend**
+### 2️⃣ Configure
 
 ```bash
-cd andres-ai-api
 cp .env.example .env
-# edit .env — at minimum set OPENAI_API_KEY, POSTGRES_PASSWORD, ADMIN_PASSWORD,
-# FASTAPI_ADMIN_SECRET_KEY (32+ chars), and FRONTEND_ORIGINS
+# Edit .env — at minimum set:
+#   OPENAI_API_KEY, POSTGRES_PASSWORD, ADMIN_PASSWORD,
+#   FASTAPI_ADMIN_SECRET_KEY (32+ chars), FRONTEND_ORIGINS
 ```
 
 <details>
-<summary>📝 <b>Environment Configuration</b> (click to expand)</summary>
+<summary>📝 <b>Environment variables</b> (click to expand)</summary>
 
 ```dotenv
-# 🔑 OpenAI API Configuration
+# 🔑 OpenAI API
 OPENAI_API_KEY=sk-proj-your-openai-api-key-here
 
-# 📊 Logfire Configuration (optional - for observability)
+# 📊 Logfire (optional - observability)
 LOGFIRE_TOKEN=pylf_v1_us_your-logfire-token-here
 
-# 🗄️ Database Configuration
+# 🗄️ Database
 DB_CONNECTION_STRING=postgresql+asyncpg://chat_user:your_secure_password@db/chat_agent_db
 POSTGRES_USER=chat_user
 POSTGRES_PASSWORD=your_secure_password
 POSTGRES_DB=chat_agent_db
 
-# 🚦 Redis Configuration (for rate limiting)
+# 🚦 Redis (rate limiting)
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_DB=0
 # REDIS_PASSWORD=your_redis_password_if_needed
 
-# 👤 FastAPI Admin
+# 👤 Admin auth (JWT cookie for the Next.js admin UI)
 ADMIN_USER=admin
 ADMIN_PASSWORD='your_secure_admin_password'
 FASTAPI_ADMIN_SECRET_KEY='your_secret_key_here_32_chars_min'
 
-# ⚙️ Application Configuration
+# 🌐 CORS — comma-separated origins the frontend will hit this API from
+FRONTEND_ORIGINS=http://localhost:3000,https://your-vercel-domain.vercel.app
+
+# ⚙️ App
 APP_ENV=development
 DEBUG=false
 
-# 📈 Analytics Configuration (optional)
+# 📈 Optional
 GA_TRACKING_ID=G-YOUR-TRACKING-ID-HERE
+SENTRY_DSN=https://your-project-id@o0.ingest.sentry.io/0
 ```
 
 </details>
 
-### 3️⃣ **Build and start the backend services**
+### 3️⃣ Build and start
 
 ```bash
-# from andres-ai-api/
 docker compose build
 docker compose up
 ```
 
-### 4️⃣ **Set up the pgvector extension**
+### 4️⃣ Enable the pgvector extension (one-time, after first start)
 
 ```bash
-# In another terminal
-docker exec -it andres-ai-agent_db psql -U chat_user -d chat_agent_db
+docker exec -it andres-ai-agent_db psql -U chat_user -d chat_agent_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-### 5️⃣ **Configure and start the frontend**
+### 5️⃣ Apply migrations
 
 ```bash
-cd ../andres-ai-app
-cp .env.local.example .env.local
-# edit .env.local — NEXT_PUBLIC_API_URL=http://localhost:8000 for local dev
+docker compose run --rm backend uv run alembic upgrade head
+```
+
+### 6️⃣ Run the frontend (separate repo)
+
+```bash
+# In another terminal, outside this repo
+git clone git@github.com:aduquehd/andres-ai-agent-app.git
+cd andres-ai-agent-app
+cp .env.local.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:8000
 pnpm install
 pnpm dev
 ```
 
-> The frontend uses **pnpm** (pinned via `packageManager` in `package.json`). Install it once with `npm install -g pnpm` or `corepack enable && corepack prepare pnpm@latest --activate`.
+The API is now at <http://localhost:8000>, the chat at <http://localhost:3000/>, and the admin at <http://localhost:3000/admin>.
 
-### 6️⃣ **Access the application**
+## 🌐 API Endpoints
 
-<table>
-<tr>
-<td align="center">
-<h4>💬 Chat Interface</h4>
-<a href="http://localhost:3000/">http://localhost:3000/</a>
-</td>
-<td align="center">
-<h4>⚙️ Admin Panel</h4>
-<a href="http://localhost:3000/admin">http://localhost:3000/admin</a>
-</td>
-<td align="center">
-<h4>⚡ API</h4>
-<a href="http://localhost:8000/">http://localhost:8000/</a>
-</td>
-</tr>
-</table>
+### Chat API (consumed by the Next.js chat at `/`)
 
-## 🚦 API Rate Limiting
+| Method | Path                 | Description                                      | Rate limit  |
+|--------|----------------------|--------------------------------------------------|-------------|
+| `GET`  | `/api/chats/history` | Chat history for the authenticated UUID user     | 100/min/IP  |
+| `POST` | `/api/chats/send`    | Send a message; streams newline-delimited JSON   | 30/min/IP   |
 
-The application implements intelligent rate limiting to ensure fair usage and prevent abuse:
+Auth headers (CORS allows credentials):
+- `Authorization: User-Id <uuid>`
+- `X-Browser-Id: <uuid>`
 
-### Rate Limits
+### Admin API (consumed by the Next.js admin at `/admin`)
 
-| Endpoint | Limit | Window | Description |
-|----------|-------|--------|-------------|
-| `/api/chats/history` | 100 requests | 60 seconds | Retrieve chat history |
-| `/api/chats/send` | 30 requests | 60 seconds | Send messages to the AI |
+| Method                  | Path                          | Description                                 |
+|-------------------------|-------------------------------|---------------------------------------------|
+| `POST`                  | `/api/admin/login`            | Username/password → sets httpOnly JWT cookie |
+| `POST`                  | `/api/admin/logout`           | Clears the JWT cookie                        |
+| `GET`                   | `/api/admin/me`               | Returns current admin session info           |
+| `GET/POST/PATCH/DELETE` | `/api/admin/users`            |                                              |
+| `GET/POST/PATCH/DELETE` | `/api/admin/messages`         |                                              |
+| `GET/POST/PATCH/DELETE` | `/api/admin/agent-messages`   |                                              |
+| `GET/POST/PATCH/DELETE` | `/api/admin/knowledge-base`   | Regenerates the embedding on save            |
+| `GET/POST/PATCH/DELETE` | `/api/admin/agent-contexts`   |                                              |
 
-### Features
+The admin cookie is set with `SameSite=None; Secure` so it survives the cross-origin admin flow from Vercel.
 
-- **🔴 Redis-powered** - Fast, distributed rate limiting using Redis
-- **🔐 IP-based tracking** - Limits are applied per IP address (supports CloudFlare and proxies)
-- **📱 User-friendly errors** - Clear messages with retry-after information
-- **🔄 Automatic recovery** - Limits reset automatically after the time window
+## 🚦 Rate limiting
 
-### Error Handling
+Redis-backed, per-IP, with CloudFlare/proxy `X-Forwarded-For` support. Limits reset automatically; clients get **HTTP 429** with a `Retry-After` header. No extra config needed — uses the Redis settings from `.env`.
 
-When rate limits are exceeded:
-- **HTTP 429 Status** - "Too Many Requests" response
-- **Retry-After Header** - Indicates when the client can retry
-- **User Notification** - Frontend displays friendly error messages without console spam
+## 🏗️ Architecture
 
-### Configuration
+```
+modules/
+├── admin/            JSON CRUD routes consumed by the Next.js admin UI
+├── agent/            Pydantic AI agent, tools, models
+├── chats/            Chat endpoints + streaming
+├── knowledge_base/   RAG over pgvector (auto-embed on save)
+├── users/            User accounts
+└── utils/            Shared: auth, database, agent, rate limiting
+```
 
-Rate limiting is automatically configured with the Redis settings in your `.env` file. No additional configuration needed!
+Key models live in `modules/*/models.py`: `User`, `AgentMessage`, `Message`, `KnowledgeBase`, `AgentContext`.
 
 ## 💻 Development
 
-### 🎨 Code Formatting
-
-<table>
-<tr>
-<td>
-
-#### 🐍 Python Code (Ruff)
+### 🐍 Lint & format (Ruff)
 
 ```bash
-# Format all Python files
+# format
 docker compose run --rm backend uv run ruff format .
-
-# Check for linting issues
+# lint
 docker compose run --rm backend uv run ruff check .
-
-# Fix auto-fixable issues
+# autofix
 docker compose run --rm backend uv run ruff check . --fix
 ```
 
-</td>
-<td>
-
-#### 🌐 Frontend (Next.js + pnpm)
-
-```bash
-# from andres-ai-app/
-pnpm dev           # dev server
-pnpm build         # production build
-pnpm lint          # ESLint
-```
-
-</td>
-</tr>
-</table>
-
-> ⚠️ **Important**: After backend changes, run Ruff inside `andres-ai-api/`:
-> ```bash
-> cd andres-ai-api && docker compose run --rm backend uv run ruff format .
-> ```
-
-### 🗄️ Database Connection
+### 🗄️ Local DB
 
 ```yaml
 Connection String: jdbc:postgresql://localhost:15432/chat_agent_db
 Username: chat_user
-Password: (from your andres-ai-api/.env file)
+Password: (from your .env)
 ```
 
-### 📊 Data Management
+### 🧰 Migrations
 
-#### Populate Geographic Data
+```bash
+# apply
+docker compose run --rm backend uv run alembic upgrade head
+# new revision (autogenerate)
+docker compose run --rm backend uv run alembic revision --autogenerate -m "description"
+```
 
-To populate geographic data for existing users:
+### 📊 Populate geographic data for existing users
 
 ```bash
 docker compose run --rm backend uv run python -m scripts.populate_user_geo_data
 ```
 
-## 🎯 Configuring the Agent
+## 🎯 Configuring the agent
 
-The knowledge base powers your AI agent's contextual understanding. Manage it through the admin panel at `/admin`.
+The knowledge base powers the agent's RAG context. Manage it from the admin panel at `/admin/knowledge-base` (frontend).
 
 <details>
-<summary>📚 <b>Knowledge Base Example</b> (click to expand)</summary>
+<summary>📚 <b>Knowledge base example</b> (click to expand)</summary>
 
 ```json
 [
@@ -300,110 +259,57 @@ The knowledge base powers your AI agent's contextual understanding. Manage it th
 
 # 🚢 Deployment
 
-The two projects deploy independently.
+The backend deploys to your own server via Docker. The frontend deploys to Vercel — see the [frontend repo](https://github.com/aduquehd/andres-ai-agent-app#-deployment) for those instructions.
 
-## Backend (`andres-ai-api/`) — Docker on your own server
+## Backend — Docker on your own server
 
-> 💡 **Note**: You may need to use `sudo` for all docker commands.
+> 💡 You may need `sudo` for docker commands depending on your setup.
 
 ### Prerequisites
 
-- ✅ Install Docker on your server
-- ✅ Configure your domain in `andres-ai-api/compose/prod/Caddyfile`
-- ✅ Create production `andres-ai-api/.env`
+- ✅ Docker installed on the server
+- ✅ Your domain configured in `compose/prod/Caddyfile`
+- ✅ A production `.env` file (use `APP_ENV=production`)
+- ✅ The frontend's deployed origin listed in `FRONTEND_ORIGINS` (comma-separated)
 
-<details>
-<summary>🔐 <b>Production Environment Variables</b> (click to expand)</summary>
-
-```dotenv
-# 🔑 OpenAI API Configuration
-OPENAI_API_KEY=sk-proj-your-openai-api-key-here
-
-# 📊 Logfire Configuration (optional)
-LOGFIRE_TOKEN=pylf_v1_us_your-logfire-token-here
-
-# 🗄️ Database Configuration
-DB_CONNECTION_STRING=postgresql+asyncpg://chat_user:your_secure_password@db/chat_agent_db
-POSTGRES_USER=chat_user
-POSTGRES_PASSWORD=your_secure_password
-POSTGRES_DB=chat_agent_db
-
-# 🚦 Redis Configuration (for rate limiting)
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_DB=0
-# REDIS_PASSWORD=your_redis_password_if_needed
-
-# 👤 FastAPI Admin
-ADMIN_USER=admin
-ADMIN_PASSWORD='your_secure_admin_password'
-FASTAPI_ADMIN_SECRET_KEY='your_secret_key_here_32_chars_min'
-
-# ⚙️ Application Configuration
-APP_ENV=production
-DEBUG=false
-
-# 📈 Analytics Configuration (optional)
-GA_TRACKING_ID=G-YOUR-TRACKING-ID-HERE
-```
-
-</details>
-
-### 🚀 Deploy Steps
+### Deploy steps
 
 ```bash
-cd andres-ai-api
-
-# 1. Build the production images
+# 1. Build production images
 docker compose -f docker-compose.prod.yml build
 
-# 2. Start the services
+# 2. Start the stack
 docker compose -f docker-compose.prod.yml up -d
 
-# 3. Setup pgvector extension
-docker exec -it andres-ai-agent_db psql -U chat_user -d chat_agent_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
+# 3. Enable pgvector (one-time)
+docker exec -it andres-ai-agent_db psql -U chat_user -d chat_agent_db \
+  -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
-# 4. Visit your API
-# https://api.your-domain.com  (configured in compose/prod/Caddyfile)
+# 4. Apply migrations
+docker compose -f docker-compose.prod.yml run --rm backend uv run alembic upgrade head
 ```
 
-### 🔄 Re-deployment
+Caddy will serve the API on the domain configured in `compose/prod/Caddyfile`.
+
+### Re-deployment
 
 ```bash
-cd andres-ai-api
 source deploy-server.sh
 ```
 
-## Frontend (`andres-ai-app/`) — Vercel
-
-The frontend is a standard Next.js app and deploys to Vercel with zero configuration.
-
-1. Push the repo to GitHub.
-2. In Vercel, create a new project and set **Root Directory** to `andres-ai-app`.
-3. Add the env vars (Production + Preview):
-   - `NEXT_PUBLIC_API_URL` = your deployed API base URL (no trailing slash).
-   - `NEXT_PUBLIC_GA_TRACKING_ID` (optional).
-4. On the backend, add the Vercel domain to `FRONTEND_ORIGINS` (comma-separated) and redeploy the API so CORS + cookie SameSite=None work.
-5. Deploy. `/` is the chat, `/admin` is the admin (gated by JWT cookie). `/admin/*` is auto-excluded from indexing via `vercel.json`.
-
-## 🛠️ Production Setup with Supervisor
+### Production with Supervisor (auto-restart)
 
 <details>
-<summary>⚡ <b>Auto-restart Configuration</b> (click to expand)</summary>
+<summary>⚡ <b>Supervisor configuration</b> (click to expand)</summary>
 
-### 1. Install Supervisor
 ```bash
 sudo apt install supervisor -y
-```
-
-### 2. Create Configuration
-```bash
 sudo nano /etc/supervisor/conf.d/ai_agent.conf
 ```
 
 ```ini
 [program:ai_agent]
-directory=/home/ubuntu/AndresAI/andres-ai-api
+directory=/home/ubuntu/AndresAI-Agent
 command=sudo /usr/bin/docker compose -f docker-compose.prod.yml up
 autostart=true
 autorestart=true
@@ -411,19 +317,15 @@ stderr_logfile=/var/log/ai_agent.err.log
 stdout_logfile=/var/log/ai_agent.out.log
 ```
 
-### 3. Apply Configuration
 ```bash
 sudo supervisorctl reread
 sudo supervisorctl update
 sudo supervisorctl start ai_agent
 ```
 
-### 📋 Useful Commands
+Useful:
 ```bash
-# View logs
 sudo tail -f /var/log/ai_agent.out.log
-
-# Stop for debugging
 sudo supervisorctl stop ai_agent
 docker compose -f docker-compose.prod.yml up
 ```
@@ -434,7 +336,7 @@ docker compose -f docker-compose.prod.yml up
 
 <div align="center">
 
-**Built with ❤️ using modern web technologies**
+**Built with ❤️ using FastAPI, Pydantic AI, and pgvector**
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
