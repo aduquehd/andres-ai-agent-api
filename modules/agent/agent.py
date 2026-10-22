@@ -1,5 +1,5 @@
 import pydantic_core
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, ModelSettings, RunContext
 from pydantic_ai.capabilities import Instrumentation
 
 from config import settings
@@ -15,6 +15,10 @@ agent = Agent(
     deps_type=Deps,
     capabilities=[Instrumentation()],
     defer_model_check=True,
+    # Pydantic AI defaults Anthropic's max_tokens to the model's maximum output
+    # (128,000 on Sonnet 4.6). Cap it at the 4096 we have always sent; settings
+    # passed to agent.iter() still take precedence.
+    model_settings=ModelSettings(max_tokens=4096),
 )
 
 
