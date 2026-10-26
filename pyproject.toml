@@ -37,6 +37,11 @@ dev = [
     "pytest-asyncio>=0.25",
 ]
 
+[tool.uv]
+# anthropic 2.x moves to a new API version; stay on 1.x until pydantic-ai
+# supports it, so a blanket `uv lock --upgrade` can't pull it in.
+constraint-dependencies = ["anthropic<2"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
