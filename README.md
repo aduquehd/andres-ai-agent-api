@@ -126,7 +126,7 @@ OPENAI_API_KEY=sk-proj-your-openai-api-key-here
 # 🧠 Agent / RAG (optional overrides — defaults shown)
 # Any Pydantic AI model string works, e.g. openai:gpt-5, google:gemini-2.5-pro
 # AGENT_MODEL is the fallback: a model config saved in the admin (/admin/model-config) wins.
-# AGENT_MODEL=anthropic:claude-sonnet-4-6
+# AGENT_MODEL=anthropic:claude-sonnet-5-5
 # EMBEDDING_MODEL=text-embedding-3-small
 
 # 🗄️ Database
