@@ -142,6 +142,8 @@ Auth: `Authorization: User-Id <uuid>` and `X-Browser-Id: <uuid>` headers (CORS a
 - `GET/POST/PATCH/DELETE /api/admin/agent-messages`
 - `GET/POST/PATCH/DELETE /api/admin/knowledge-base` (regenerates embedding on save)
 - `GET/POST/PATCH/DELETE /api/admin/agent-contexts`
+- `GET/PATCH/DELETE /api/admin/model-config` — the agent's model and request settings (single row; `PATCH` saves only after a test turn with the new config succeeds; `DELETE` falls back to `AGENT_MODEL`)
+- `POST /api/admin/model-config/test` — runs one real agent turn with a candidate config without saving it
 
 ## Database Schema
 
@@ -152,6 +154,7 @@ Key models in `modules/*/models.py`:
 - **Message**: Individual user/agent message records
 - **KnowledgeBase**: Vector-indexed agent context
 - **AgentContext**: Agent context entries
+- **AgentModelConfig**: Single-row model config (model, effort, max tokens, temperature) read on every chat request; no row means `settings.agent_model` with the agent's defaults (`DEFAULT_MAX_TOKENS` in `modules/agent/agent.py`)
 
 ## Local Database Connection
 
