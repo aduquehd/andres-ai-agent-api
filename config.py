@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # Agent / RAG
-    agent_model: str = "anthropic:claude-sonnet-4-6"
+    agent_model: str = "anthropic:claude-sonnet-5-5"
     embedding_model: str = "text-embedding-3-small"
 
     # Analytics

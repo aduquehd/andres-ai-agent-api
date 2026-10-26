@@ -10,15 +10,18 @@ from modules.utils.agent import Deps
 from modules.utils.embeddings import embed_query
 
 
+# Pydantic AI defaults Anthropic's max_tokens to the model's maximum output
+# (128,000 on current Claude models). Cap it well below that, with room for
+# thinking, which counts toward the limit and is on by default on Claude 5.x.
+# A max_tokens saved in the admin model config still takes precedence.
+DEFAULT_MAX_TOKENS = 16_000
+
 agent = Agent(
     settings.agent_model,
     deps_type=Deps,
     capabilities=[Instrumentation()],
     defer_model_check=True,
-    # Pydantic AI defaults Anthropic's max_tokens to the model's maximum output
-    # (128,000 on Sonnet 4.6). Cap it at the 4096 we have always sent; settings
-    # passed to agent.iter() still take precedence.
-    model_settings=ModelSettings(max_tokens=4096),
+    model_settings=ModelSettings(max_tokens=DEFAULT_MAX_TOKENS),
 )
 
 

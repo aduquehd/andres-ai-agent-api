@@ -124,8 +124,9 @@ OPENAI_API_KEY=sk-proj-your-openai-api-key-here
 # GOOGLE_API_KEY=your-google-api-key-here
 
 # 🧠 Agent / RAG (optional overrides — defaults shown)
-# Any Pydantic AI model string works, e.g. openai:gpt-5, google-gla:gemini-2.5-pro
-# AGENT_MODEL=anthropic:claude-sonnet-4-6
+# Any Pydantic AI model string works, e.g. openai:gpt-5, google:gemini-2.5-pro
+# AGENT_MODEL is the fallback: a model config saved in the admin (/admin/model-config) wins.
+# AGENT_MODEL=anthropic:claude-sonnet-5-5
 # EMBEDDING_MODEL=text-embedding-3-small
 
 # 🗄️ Database
@@ -253,6 +254,8 @@ CORS is restricted to the origins in `FRONTEND_ORIGINS`, with credentials allowe
 | `GET`/`DELETE`          | `/api/admin/agent-messages/{id}`    |                                                |
 | `GET/POST/PATCH/DELETE` | `/api/admin/knowledge-base`         | RAG entries — regenerates the embedding on save |
 | `GET/POST/PATCH/DELETE` | `/api/admin/agent-contexts`         | Agent system-prompt context entries            |
+| `GET`/`PATCH`/`DELETE`  | `/api/admin/model-config`           | Agent model and request settings; `PATCH` saves only after a test turn passes, `DELETE` falls back to `AGENT_MODEL` |
+| `POST`                  | `/api/admin/model-config/test`      | One real agent turn with a candidate config, not saved |
 
 ## 🚦 Rate limiting
 
@@ -270,7 +273,7 @@ modules/
 └── utils/            Shared: auth, database, embeddings, geo, rate limiting, redis
 ```
 
-Key models live in `modules/*/models.py`: `User`, `AgentMessage`, `Message`, `KnowledgeBase`, `AgentContext`.
+Key models live in `modules/*/models.py`: `User`, `AgentMessage`, `Message`, `KnowledgeBase`, `AgentContext`, `AgentModelConfig`.
 
 The agent (`modules/agent/agent.py`) is a Pydantic AI `Agent` with a dynamic system prompt loaded from the `AgentContext` table and a `search_knowledge_base` tool that does semantic search over the pgvector-indexed knowledge base.
 

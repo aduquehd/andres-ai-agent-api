@@ -11,6 +11,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from modules.admin.realtime import publish_message_created, publish_user_created
 from modules.agent.agent import agent
+from modules.agent.services import build_model_settings, get_agent_model_config
 from modules.chats.models import AgentMessage, Message, MessageDirectionEnum
 from modules.chats.services import add_agent_message, add_message
 from modules.chats.stream import iter_streamed_text
@@ -137,6 +138,7 @@ async def post_chat(
 
         list_messages = load_model_messages([message.message_list for message in messages])
         deps = Deps(session=session)
+        model_config = await get_agent_model_config(session)
 
         # Stream via agent.iter() so text emitted before AND after tool calls is
         # forwarded to the client. agent.run_stream() only streams the first
@@ -148,7 +150,13 @@ async def post_chat(
         accumulated_text = ""
         stream_timestamp = datetime.now(tz=UTC).isoformat()
 
-        async with agent.iter(prompt, message_history=list_messages, deps=deps) as agent_run:
+        async with agent.iter(
+            prompt,
+            message_history=list_messages,
+            deps=deps,
+            model=model_config.model,
+            model_settings=build_model_settings(model_config),
+        ) as agent_run:
             async for accumulated_text in iter_streamed_text(agent_run):
                 yield (
                     json.dumps(

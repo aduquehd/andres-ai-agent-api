@@ -5,7 +5,7 @@ from sqlmodel import SQLModel
 
 from alembic import context
 from config import settings
-from modules.agent.models import AgentContext  # noqa: F401
+from modules.agent.models import AgentContext, AgentModelConfig  # noqa: F401
 from modules.chats.models import AgentMessage, Message  # noqa: F401
 from modules.knowledge_base.models import KnowledgeBase  # noqa: F401
 from modules.users.models import User  # noqa: F401

@@ -2,8 +2,9 @@
 
 import asyncio
 import logging
+import time
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import jwt
 from fastapi import (
@@ -15,12 +16,15 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from pydantic_ai.exceptions import AgentRunError, UserError
+from pydantic_ai.models import Model, infer_model
 from sqlalchemy import and_, cast, delete, func, or_
 from sqlalchemy.types import Date
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from config import settings
 from modules.admin.auth import (
     ADMIN_COOKIE_NAME,
     ADMIN_TOKEN_TTL_HOURS,
@@ -30,10 +34,18 @@ from modules.admin.auth import (
     verify_admin_credentials,
 )
 from modules.admin.realtime import broadcaster
-from modules.agent.models import AgentContext
+from modules.agent.agent import DEFAULT_MAX_TOKENS, agent
+from modules.agent.models import AgentContext, AgentModelConfig
+from modules.agent.services import (
+    AGENT_MODEL_CONFIG_ID,
+    build_model_settings,
+    get_agent_model_config,
+)
 from modules.chats.models import AgentMessage, Message, MessageDirectionEnum
+from modules.chats.stream import iter_streamed_text
 from modules.knowledge_base.models import KnowledgeBase, KnowledgeBaseTypeEnum
 from modules.users.models import User
+from modules.utils.agent import Deps
 from modules.utils.database import get_session
 from modules.utils.embeddings import embed_document
 
@@ -968,3 +980,161 @@ async def delete_agent_context(
     await session.delete(a)
     await session.commit()
     return {"ok": True}
+
+
+# ---------------------------------------------------------- model-config ---
+
+MODEL_CONFIG_TEST_PROMPT = "Hello! Introduce yourself in one sentence."
+MODEL_CONFIG_TEST_TIMEOUT_SECONDS = 60
+
+
+class ModelConfigPayload(BaseModel):
+    # Pydantic AI model string, "<provider>:<model id>". The provider may contain
+    # a "/", as in Pydantic AI Gateway strings ("gateway/anthropic:...").
+    model: str = Field(max_length=200, pattern=r"^[\w./-]+:\S+$")
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    max_tokens: int | None = Field(default=None, ge=1, le=128_000)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+
+
+def _model_config_to_dict(config: AgentModelConfig) -> dict[str, Any]:
+    saved = config.id is not None
+    return {
+        "model": config.model,
+        "effort": config.effort,
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+        # "default" means nothing is saved and the agent runs on settings.agent_model.
+        "source": "database" if saved else "default",
+        "default_model": settings.agent_model,
+        # What a blank max_tokens means.
+        "default_max_tokens": DEFAULT_MAX_TOKENS,
+        "updated_at": config.updated_at.isoformat() if saved and config.updated_at else None,
+    }
+
+
+def _build_model(payload: ModelConfigPayload) -> Model:
+    """Build the payload's model, refusing what Pydantic AI can't use or would drop."""
+    try:
+        model = infer_model(payload.model)
+    except Exception as exc:  # unknown provider, missing API key or provider package
+        raise HTTPException(status_code=400, detail=f"Cannot use {payload.model!r}: {exc}") from exc
+    # Pydantic AI drops temperature for these models with only a warning, so it
+    # would save fine and never reach the provider.
+    if payload.temperature is not None and model.profile.get(
+        "anthropic_disallows_sampling_settings", False
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{model.model_name} does not take a temperature, leave it blank",
+        )
+    return model
+
+
+async def _run_test_turn(payload: ModelConfigPayload, session: AsyncSession) -> dict[str, Any]:
+    """Run one real agent turn with the payload's config, streamed the way the chat runs it.
+
+    A model or setting that can't be used at all is a 400; anything the provider
+    rejects comes back as ``{"ok": False, "error": ...}``.
+    """
+    model = _build_model(payload)
+    model_settings = build_model_settings(AgentModelConfig(**payload.model_dump()))
+
+    async def stream_turn():
+        async with agent.iter(
+            MODEL_CONFIG_TEST_PROMPT,
+            deps=Deps(session=session),
+            model=model,
+            model_settings=model_settings,
+        ) as agent_run:
+            text = ""
+            async for text in iter_streamed_text(agent_run):
+                pass
+            return agent_run.result, text
+
+    started = time.perf_counter()
+    try:
+        result, text = await asyncio.wait_for(
+            stream_turn(), timeout=MODEL_CONFIG_TEST_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        log.warning("model config test timed out for %s", payload.model)
+        return {"ok": False, "error": f"No response after {MODEL_CONFIG_TEST_TIMEOUT_SECONDS}s"}
+    except (AgentRunError, UserError) as exc:
+        # The provider rejected the model id, a setting or the API key.
+        log.warning("model config test failed for %s: %s", payload.model, exc)
+        return {"ok": False, "error": str(exc)[:1000]}
+    except Exception as exc:
+        # Anything else (a failing tool, the database) is still reported, not a bare 500.
+        log.exception("model config test errored for %s", payload.model)
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:1000]}
+    if result.response.finish_reason == "length":
+        # Saving this would cut real answers short, thinking counts toward the limit.
+        max_tokens = payload.max_tokens or DEFAULT_MAX_TOKENS
+        return {
+            "ok": False,
+            "error": f"The reply hit max_tokens ({max_tokens}) before it finished; "
+            "raise max tokens or lower the effort",
+        }
+    return {
+        "ok": True,
+        # What the chat would show: text from before and after any tool calls.
+        "output": text,
+        "model": result.response.model_name,
+        "latency_ms": int((time.perf_counter() - started) * 1000),
+        "input_tokens": result.usage.input_tokens,
+        "output_tokens": result.usage.output_tokens,
+    }
+
+
+@router.get("/model-config", dependencies=[Depends(require_admin)])
+async def get_model_config(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    return _model_config_to_dict(await get_agent_model_config(session))
+
+
+@router.patch("/model-config", dependencies=[Depends(require_admin)])
+async def update_model_config(
+    payload: ModelConfigPayload,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    """Save the config once one real agent turn with it succeeds.
+
+    The chat reads this row on every message, so a config the provider rejects
+    (a typo in the model id, an unsupported effort level) would take the chat
+    down until someone reset it.
+    """
+    test = await _run_test_turn(payload, session)
+    if not test["ok"]:
+        raise HTTPException(status_code=400, detail=f"The test turn failed: {test['error']}")
+    config = await session.get(AgentModelConfig, AGENT_MODEL_CONFIG_ID) or AgentModelConfig(
+        id=AGENT_MODEL_CONFIG_ID
+    )
+    # Save exactly what the test turn ran with.
+    config.sqlmodel_update(payload.model_dump() | {"updated_at": datetime.now(tz=UTC)})
+    session.add(config)
+    await session.commit()
+    await session.refresh(config)
+    return _model_config_to_dict(config)
+
+
+@router.delete("/model-config", dependencies=[Depends(require_admin)])
+async def reset_model_config(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    """Drop the saved config so the agent falls back to settings.agent_model."""
+    config = await session.get(AgentModelConfig, AGENT_MODEL_CONFIG_ID)
+    if config is not None:
+        await session.delete(config)
+        await session.commit()
+    return _model_config_to_dict(await get_agent_model_config(session))
+
+
+@router.post("/model-config/test", dependencies=[Depends(require_admin)])
+async def test_model_config(
+    payload: ModelConfigPayload,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, Any]:
+    """Run one real agent turn with the given config, without saving it."""
+    return await _run_test_turn(payload, session)
